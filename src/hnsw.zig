@@ -99,7 +99,7 @@ pub fn HNSW(comptime T: type) type {
             while (level > level_to_place) : (level -= 1) {
                 w = try self.searchLayer(point, &entry_points, 1, level);
                 entry_points[0] = w[0].id;
-                self.allocator.free(w);
+                defer self.allocator.free(w);
             }
             const top_insertion_level = @min(self.max_level, level_to_place);
             for (0..top_insertion_level + 1) |i| {
@@ -112,7 +112,7 @@ pub fn HNSW(comptime T: type) type {
                 for (w[0..num_neighbors]) |neighbor| {
                     try self.connect(id, neighbor.id, level);
                 }
-                self.allocator.free(w);
+                defer self.allocator.free(w);
             }
 
             if (level_to_place > self.max_level) {
@@ -160,10 +160,11 @@ pub fn HNSW(comptime T: type) type {
             };
             const context = Context{ .self = self, .node = node };
 
+            // TODO: Can this be optimized away? Have we computed these all before?
             const compareFn = struct {
                 fn compare(ctx: Context, a: usize, b: usize) bool {
-                    const dist_a = distance(ctx.node.point, ctx.self.nodes.get(a).?.point);
-                    const dist_b = distance(ctx.node.point, ctx.self.nodes.get(b).?.point);
+                    const dist_a = distance_simd(ctx.node.point, ctx.self.nodes.get(a).?.point);
+                    const dist_b = distance_simd(ctx.node.point, ctx.self.nodes.get(b).?.point);
                     return dist_a < dist_b;
                 }
             }.compare;
@@ -177,10 +178,11 @@ pub fn HNSW(comptime T: type) type {
         fn randomLevel(self: *Self) usize {
             _ = self;
             var level: usize = 0;
-            const max_level = 31;
-            while (level < max_level and std.crypto.random.float(f32) < 0.5) {
-                level += 1;
-            }
+            // Paper used log_e, but maybe using log_2 is ok & better for perf?
+            const max_level = 40;
+            const ml: f32 = 1.0 / std.math.log2(@as(f32, max_level));
+            const rand_level = -std.math.log2(std.crypto.random.float(f32)) * ml;
+            level = @intFromFloat(rand_level);
             return level;
         }
 
@@ -190,6 +192,34 @@ pub fn HNSW(comptime T: type) type {
             }
             var sum: T = 0;
             for (a, 0..) |_, i| {
+                const diff = a[i] - b[i];
+                sum += diff * diff;
+            }
+            return sum; // Note: We're returning squared distance for efficiency
+        }
+
+        fn distance_simd(a: []const T, b: []const T) T {
+            // This is likely the hottest function in the code. Optimizing (or avoiding) this probably nets the biggest wins.
+            if (a.len != b.len) {
+                @panic("Mismatched dimensions in distance calculation");
+            }
+            var sum: T = 0;
+            const vec_width = 8; // Hardcoded 8x16 for AVX2
+            const n_vecs = a.len / vec_width;
+            // First handle full vector chunks
+            for (0..n_vecs) |v| {
+                const i = v * vec_width;
+                var vec_a: @Vector(vec_width, T) = undefined;
+                var vec_b: @Vector(vec_width, T) = undefined;
+                for (0..vec_width) |j| {
+                    vec_a[j] = a[i + j];
+                    vec_b[j] = b[i + j];
+                }
+                vec_a = vec_a - vec_b;
+                sum += @reduce(.Add, vec_a * vec_a);
+            }
+            // Handle remaining elements
+            for (n_vecs * vec_width..a.len) |i| {
                 const diff = a[i] - b[i];
                 sum += diff * diff;
             }
@@ -212,7 +242,7 @@ pub fn HNSW(comptime T: type) type {
             while (level > 0) : (level -= 1) {
                 w = try self.searchLayer(query, &entry_points, k, level);
                 entry_points[0] = w[0].id;
-                self.allocator.free(w);
+                defer self.allocator.free(w);
             }
             w = try self.searchLayer(query, &entry_points, k, 0);
             return w;
@@ -225,17 +255,17 @@ pub fn HNSW(comptime T: type) type {
 
             if (entry_points.len == 0) return result.toOwnedSlice();
 
-            var candidates = std.PriorityQueue(CandidateNode, void, CandidateNode.lessThan).init(self.allocator, {});
+            var candidates = std.PriorityQueue(CandidateNode, void, CandidateNode.lessThanOrdering).init(self.allocator, {});
             defer candidates.deinit();
 
-            var w = std.PriorityQueue(CandidateNode, void, CandidateNode.greaterThan).init(self.allocator, {});
+            var w = std.PriorityQueue(CandidateNode, void, CandidateNode.greaterThanOrdering).init(self.allocator, {});
             defer w.deinit();
 
             var visited = std.AutoHashMap(usize, void).init(self.allocator);
             defer visited.deinit();
 
             for (entry_points) |entry| {
-                const dist = distance(query, self.nodes.get(entry).?.point);
+                const dist = distance_simd(query, self.nodes.get(entry).?.point);
                 try candidates.add(.{ .id = entry, .distance = dist });
                 try visited.put(entry, {});
                 try w.add(.{ .id = entry, .distance = dist });
@@ -245,7 +275,7 @@ pub fn HNSW(comptime T: type) type {
                 // current = closest candidate
                 const current = candidates.remove();
                 const current_node = self.nodes.get(current.id).?;
-                const current_dist = distance(query, current_node.point);
+                const current_dist = current.distance;
 
                 const f = w.peek().?; // Always non-empty; We never pop unless we have more than k results
                 if (current_dist > f.distance) {
@@ -256,7 +286,7 @@ pub fn HNSW(comptime T: type) type {
                     if (visited.contains(neighbor_id)) continue;
                     try visited.put(neighbor_id, {});
                     const neighbor = self.nodes.get(neighbor_id).?;
-                    const dist = distance(query, neighbor.point);
+                    const dist = distance_simd(query, neighbor.point);
                     if (w.count() < k or dist < f.distance) {
                         try candidates.add(.{ .id = neighbor_id, .distance = dist });
                         try w.add(.{ .id = neighbor_id, .distance = dist });
@@ -267,20 +297,11 @@ pub fn HNSW(comptime T: type) type {
                 }
             }
 
-            const Context = struct {
-                query: []const T,
-                pub fn lessThan(ctx: @This(), a: Node, b: Node) bool {
-                    return distance(ctx.query, a.point) < distance(ctx.query, b.point);
-                }
-            };
-
-            // Transfer `w` to `result`.
-            // Side note: Kinda wish PriorityQueue had a `toOwnedSlice()` method, so I can just move the heap over then sort.
+            std.sort.heap(CandidateNode, w.items, {}, CandidateNode.lessThan);
             for (w.items) |item| {
                 const node = self.nodes.get(item.id).?;
                 try result.append(node);
             }
-            std.sort.insertion(Node, result.items, Context{ .query = query }, Context.lessThan);
 
             return result.toOwnedSlice();
         }
@@ -289,10 +310,13 @@ pub fn HNSW(comptime T: type) type {
             id: usize,
             distance: T,
 
-            fn lessThan(_: void, a: CandidateNode, b: CandidateNode) std.math.Order {
+            fn lessThan(_: void, a: CandidateNode, b: CandidateNode) bool {
+                return a.distance < b.distance;
+            }
+            fn lessThanOrdering(_: void, a: CandidateNode, b: CandidateNode) std.math.Order {
                 return std.math.order(a.distance, b.distance);
             }
-            fn greaterThan(_: void, a: CandidateNode, b: CandidateNode) std.math.Order {
+            fn greaterThanOrdering(_: void, a: CandidateNode, b: CandidateNode) std.math.Order {
                 return std.math.order(b.distance, a.distance);
             }
         };
