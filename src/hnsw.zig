@@ -75,44 +75,49 @@ pub fn HNSW(comptime T: type) type {
             defer self.mutex.unlock();
 
             const id = self.nodes.count();
-            const level = self.randomLevel();
-            var node = try Node.init(self.allocator, id, point, level);
-            errdefer node.deinit(self.allocator);
+            const level_to_place = self.randomLevel();
 
-            try self.nodes.put(id, node);
-
-            if (self.entry_point) |entry| {
-                var ep_copy = entry;
-                var curr_dist = distance(node.point, self.nodes.get(ep_copy).?.point);
-
-                for (0..self.max_level + 1) |layer| {
-                    var changed = true;
-                    while (changed) {
-                        changed = false;
-                        const curr_node = self.nodes.get(ep_copy).?;
-                        if (layer < curr_node.connections.len) {
-                            for (curr_node.connections[layer].items) |neighbor_id| {
-                                const neighbor = self.nodes.get(neighbor_id).?;
-                                const dist = distance(node.point, neighbor.point);
-                                if (dist < curr_dist) {
-                                    ep_copy = neighbor_id;
-                                    curr_dist = dist;
-                                    changed = true;
-                                }
-                            }
-                        }
-                    }
-
-                    if (layer <= level) {
-                        try self.connect(id, ep_copy, @intCast(layer));
-                    }
-                }
-            } else {
+            // Initialization case when graph is empty.
+            // We don't strictly have to handle this case (we could just make it fall through)
+            if (self.entry_point == null) {
                 self.entry_point = id;
+                self.max_level = level_to_place;
+                var node = try Node.init(self.allocator, id, point, level_to_place);
+                errdefer node.deinit(self.allocator);
+                try self.nodes.put(id, node);
+                return;
             }
 
-            if (level > self.max_level) {
-                self.max_level = level;
+            // Normal case.
+            var node = try Node.init(self.allocator, id, point, level_to_place);
+            errdefer node.deinit(self.allocator);
+            try self.nodes.put(id, node);
+
+            var level = self.max_level;
+            var w: []const Node = undefined;
+            var entry_points = [_]usize{self.entry_point.?};
+            while (level > level_to_place) : (level -= 1) {
+                w = try self.searchLayer(point, &entry_points, 1, level);
+                entry_points[0] = w[0].id;
+                self.allocator.free(w);
+            }
+            const top_insertion_level = @min(self.max_level, level_to_place);
+            for (0..top_insertion_level + 1) |i| {
+                level = top_insertion_level - i;
+                w = try self.searchLayer(point, &entry_points, self.ef_construction, level);
+                entry_points[0] = w[0].id;
+                // Attach the closest `m` neighbors
+                // TODO: Add heuristic selection
+                const num_neighbors = @min(self.m, w.len);
+                for (w[0..num_neighbors]) |neighbor| {
+                    try self.connect(id, neighbor.id, level);
+                }
+                self.allocator.free(w);
+            }
+
+            if (level_to_place > self.max_level) {
+                self.max_level = level_to_place;
+                self.entry_point = id;
             }
         }
 
@@ -191,6 +196,7 @@ pub fn HNSW(comptime T: type) type {
             return sum; // Note: We're returning squared distance for efficiency
         }
 
+        // Implementation of K-NN search algorithm
         pub fn search(self: *Self, query: []const T, k: usize) ![]const Node {
             self.mutex.lock();
             defer self.mutex.unlock();
@@ -200,10 +206,16 @@ pub fn HNSW(comptime T: type) type {
                 errdefer result.deinit();
                 return result.toOwnedSlice();
             }
-
-            const entry_points = [1]usize{self.entry_point.?};
-            // TODO: Implement HNSW search. This is currently just brute force k nearest neighbors on layer 0
-            return self.searchLayer(query, &entry_points, k, 0);
+            var w: []const Node = undefined;
+            var entry_points = [_]usize{self.entry_point.?};
+            var level = self.max_level;
+            while (level > 0) : (level -= 1) {
+                w = try self.searchLayer(query, &entry_points, k, level);
+                entry_points[0] = w[0].id;
+                self.allocator.free(w);
+            }
+            w = try self.searchLayer(query, &entry_points, k, 0);
+            return w;
         }
 
         // Implementation of Search-layer algorithm from https://arxiv.org/pdf/1603.09320
