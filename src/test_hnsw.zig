@@ -67,6 +67,34 @@ test "HNSW - Single Point" {
     try testing.expectEqualSlices(f32, point, results[0].point);
 }
 
+test "HNSW - Exact Points" {
+    const allocator = testing.allocator;
+    var hnsw = HNSW(f32).init(allocator, 16, 200);
+    defer hnsw.deinit();
+
+    const point1 = &[_]f32{ 1, 2, 3 };
+    const point2 = &[_]f32{ 4, 5, 6 };
+    const point3 = &[_]f32{ 7, 8, 9 };
+    try hnsw.insert(point1);
+    try hnsw.insert(point2);
+    try hnsw.insert(point3);
+
+    const results = try hnsw.search(point1, 1);
+    defer allocator.free(results);
+    try testing.expectEqual(@as(usize, 1), results.len);
+    try testing.expectEqualSlices(f32, point1, results[0].point);
+
+    const results2 = try hnsw.search(point2, 1);
+    defer allocator.free(results2);
+    try testing.expectEqual(@as(usize, 1), results2.len);
+    try testing.expectEqualSlices(f32, point2, results2[0].point);
+
+    const results3 = try hnsw.search(point3, 1);
+    defer allocator.free(results3);
+    try testing.expectEqual(@as(usize, 1), results3.len);
+    try testing.expectEqualSlices(f32, point3, results3[0].point);
+}
+
 test "HNSW - Large Dataset" {
     const allocator = testing.allocator;
     var hnsw = HNSW(f32).init(allocator, 16, 200);

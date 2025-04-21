@@ -195,30 +195,61 @@ pub fn HNSW(comptime T: type) type {
             self.mutex.lock();
             defer self.mutex.unlock();
 
+            if (self.entry_point == null) {
+                var result = try ArrayList(Node).initCapacity(self.allocator, k);
+                errdefer result.deinit();
+                return result.toOwnedSlice();
+            }
+
+            const entry_points = [1]usize{self.entry_point.?};
+            // TODO: Implement HNSW search. This is currently just brute force k nearest neighbors on layer 0
+            return self.searchLayer(query, &entry_points, k, 0);
+        }
+
+        // Implementation of Search-layer algorithm from https://arxiv.org/pdf/1603.09320
+        fn searchLayer(self: *Self, query: []const T, entry_points: []const usize, k: usize, level: usize) ![]const Node {
             var result = try ArrayList(Node).initCapacity(self.allocator, k);
             errdefer result.deinit();
 
-            if (self.entry_point) |entry| {
-                var candidates = std.PriorityQueue(CandidateNode, void, CandidateNode.lessThan).init(self.allocator, {});
-                defer candidates.deinit();
+            if (entry_points.len == 0) return result.toOwnedSlice();
 
-                var visited = std.AutoHashMap(usize, void).init(self.allocator);
-                defer visited.deinit();
+            var candidates = std.PriorityQueue(CandidateNode, void, CandidateNode.lessThan).init(self.allocator, {});
+            defer candidates.deinit();
 
-                try candidates.add(.{ .id = entry, .distance = distance(query, self.nodes.get(entry).?.point) });
+            var w = std.PriorityQueue(CandidateNode, void, CandidateNode.greaterThan).init(self.allocator, {});
+            defer w.deinit();
+
+            var visited = std.AutoHashMap(usize, void).init(self.allocator);
+            defer visited.deinit();
+
+            for (entry_points) |entry| {
+                const dist = distance(query, self.nodes.get(entry).?.point);
+                try candidates.add(.{ .id = entry, .distance = dist });
                 try visited.put(entry, {});
+                try w.add(.{ .id = entry, .distance = dist });
+            }
 
-                while (candidates.count() > 0 and result.items.len < k) {
-                    const current = candidates.remove();
-                    const current_node = self.nodes.get(current.id).?;
-                    try result.append(current_node);
+            while (candidates.count() > 0) {
+                // current = closest candidate
+                const current = candidates.remove();
+                const current_node = self.nodes.get(current.id).?;
+                const current_dist = distance(query, current_node.point);
 
-                    for (current_node.connections[0].items) |neighbor_id| {
-                        if (!visited.contains(neighbor_id)) {
-                            const neighbor = self.nodes.get(neighbor_id).?;
-                            const dist = distance(query, neighbor.point);
-                            try candidates.add(.{ .id = neighbor_id, .distance = dist });
-                            try visited.put(neighbor_id, {});
+                const f = w.peek().?; // Always non-empty; We never pop unless we have more than k results
+                if (current_dist > f.distance) {
+                    break;
+                }
+
+                for (current_node.connections[level].items) |neighbor_id| {
+                    if (visited.contains(neighbor_id)) continue;
+                    try visited.put(neighbor_id, {});
+                    const neighbor = self.nodes.get(neighbor_id).?;
+                    const dist = distance(query, neighbor.point);
+                    if (w.count() < k or dist < f.distance) {
+                        try candidates.add(.{ .id = neighbor_id, .distance = dist });
+                        try w.add(.{ .id = neighbor_id, .distance = dist });
+                        if (w.count() > k) {
+                            _ = w.remove();
                         }
                     }
                 }
@@ -230,6 +261,13 @@ pub fn HNSW(comptime T: type) type {
                     return distance(ctx.query, a.point) < distance(ctx.query, b.point);
                 }
             };
+
+            // Transfer `w` to `result`.
+            // Side note: Kinda wish PriorityQueue had a `toOwnedSlice()` method, so I can just move the heap over then sort.
+            for (w.items) |item| {
+                const node = self.nodes.get(item.id).?;
+                try result.append(node);
+            }
             std.sort.insertion(Node, result.items, Context{ .query = query }, Context.lessThan);
 
             return result.toOwnedSlice();
@@ -241,6 +279,9 @@ pub fn HNSW(comptime T: type) type {
 
             fn lessThan(_: void, a: CandidateNode, b: CandidateNode) std.math.Order {
                 return std.math.order(a.distance, b.distance);
+            }
+            fn greaterThan(_: void, a: CandidateNode, b: CandidateNode) std.math.Order {
+                return std.math.order(b.distance, a.distance);
             }
         };
     };
