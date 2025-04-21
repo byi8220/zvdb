@@ -104,7 +104,7 @@ pub fn runSearchBenchmark(allocator: std.mem.Allocator, num_points: usize, dim: 
     for (0..num_queries) |_| {
         const query = try randomPoint(allocator, dim);
         defer allocator.free(query);
-        const results = try hnsw.search(query, k);
+        const results = try hnsw.search(query, k, 50);
         allocator.free(results);
     }
 

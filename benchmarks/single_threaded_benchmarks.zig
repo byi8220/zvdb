@@ -26,18 +26,11 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     const config = shared.BenchmarkConfig{
-        .num_points = 1000000,
-        .dimensions = &[_]usize{960},
+        .num_points = 100000,
+        .dimensions = &[_]usize{ 128, 512, 768, 1024 },
         .num_queries = 10000,
-        .k_values = &[_]usize{10},
+        .k_values = &[_]usize{ 10, 25, 50, 100 },
     };
-
-    // const config = shared.BenchmarkConfig{
-    //     .num_points = 100000,
-    //     .dimensions = &[_]usize{ 128, 512, 768, 1024 },
-    //     .num_queries = 10000,
-    //     .k_values = &[_]usize{ 10, 25, 50, 100 },
-    // };
 
     try runSingleThreadedBenchmarks(allocator, config);
 }

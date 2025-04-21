@@ -105,14 +105,15 @@ pub fn HNSW(comptime T: type) type {
             for (0..top_insertion_level + 1) |i| {
                 level = top_insertion_level - i;
                 w = try self.searchLayer(point, &entry_points, self.ef_construction, level);
+                defer self.allocator.free(w);
                 entry_points[0] = w[0].id;
                 // Attach the closest `m` neighbors
                 // TODO: Add heuristic selection
-                const num_neighbors = @min(self.m, w.len);
+                const m = if (level == 0) self.m * 2 else self.m;
+                const num_neighbors = @min(m, w.len);
                 for (w[0..num_neighbors]) |neighbor| {
-                    try self.connect(id, neighbor.id, level);
+                    try self.connect(id, neighbor.id, level, m);
                 }
-                defer self.allocator.free(w);
             }
 
             if (level_to_place > self.max_level) {
@@ -121,7 +122,7 @@ pub fn HNSW(comptime T: type) type {
             }
         }
 
-        fn connect(self: *Self, source: usize, target: usize, level: usize) !void {
+        fn connect(self: *Self, source: usize, target: usize, level: usize, m: usize) !void {
             var source_node = self.nodes.getPtr(source) orelse return error.NodeNotFound;
             var target_node = self.nodes.getPtr(target) orelse return error.NodeNotFound;
 
@@ -138,17 +139,17 @@ pub fn HNSW(comptime T: type) type {
             }
 
             if (level < source_node.connections.len) {
-                try self.shrinkConnections(source, level);
+                try self.shrinkConnections(source, level, m);
             }
             if (level < target_node.connections.len) {
-                try self.shrinkConnections(target, level);
+                try self.shrinkConnections(target, level, m);
             }
         }
 
-        fn shrinkConnections(self: *Self, node_id: usize, level: usize) !void {
+        fn shrinkConnections(self: *Self, node_id: usize, level: usize, m: usize) !void {
             var node = self.nodes.getPtr(node_id).?;
             var connections = &node.connections[level];
-            if (connections.items.len <= self.m) return;
+            if (connections.items.len <= m) return;
 
             var candidates = try self.allocator.alloc(usize, connections.items.len);
             defer self.allocator.free(candidates);
@@ -227,10 +228,12 @@ pub fn HNSW(comptime T: type) type {
         }
 
         // Implementation of K-NN search algorithm
-        pub fn search(self: *Self, query: []const T, k: usize) ![]const Node {
+        pub fn search(self: *Self, query: []const T, k: usize, ef_search: usize) ![]const Node {
+            if (k > ef_search) {
+                @panic("ef_search must be greater than or equal to k");
+            }
             self.mutex.lock();
             defer self.mutex.unlock();
-
             if (self.entry_point == null) {
                 var result = try ArrayList(Node).initCapacity(self.allocator, k);
                 errdefer result.deinit();
@@ -240,17 +243,22 @@ pub fn HNSW(comptime T: type) type {
             var entry_points = [_]usize{self.entry_point.?};
             var level = self.max_level;
             while (level > 0) : (level -= 1) {
-                w = try self.searchLayer(query, &entry_points, k, level);
-                entry_points[0] = w[0].id;
+                w = try self.searchLayer(query, &entry_points, 1, level);
                 defer self.allocator.free(w);
+                entry_points[0] = w[0].id;
             }
-            w = try self.searchLayer(query, &entry_points, k, 0);
-            return w;
+            w = try self.searchLayer(query, &entry_points, ef_search, 0);
+            defer self.allocator.free(w);
+            const numel = @min(k, w.len);
+            const result = try self.allocator.alloc(Node, numel);
+            errdefer self.allocator.free(result);
+            @memcpy(result, w[0..numel]);
+            return result;
         }
 
         // Implementation of Search-layer algorithm from https://arxiv.org/pdf/1603.09320
-        fn searchLayer(self: *Self, query: []const T, entry_points: []const usize, k: usize, level: usize) ![]const Node {
-            var result = try ArrayList(Node).initCapacity(self.allocator, k);
+        fn searchLayer(self: *Self, query: []const T, entry_points: []const usize, ef: usize, level: usize) ![]const Node {
+            var result = try ArrayList(Node).initCapacity(self.allocator, ef);
             errdefer result.deinit();
 
             if (entry_points.len == 0) return result.toOwnedSlice();
@@ -287,10 +295,10 @@ pub fn HNSW(comptime T: type) type {
                     try visited.put(neighbor_id, {});
                     const neighbor = self.nodes.get(neighbor_id).?;
                     const dist = distance_simd(query, neighbor.point);
-                    if (w.count() < k or dist < f.distance) {
+                    if (w.count() < ef or dist < f.distance) {
                         try candidates.add(.{ .id = neighbor_id, .distance = dist });
                         try w.add(.{ .id = neighbor_id, .distance = dist });
-                        if (w.count() > k) {
+                        if (w.count() > ef) {
                             _ = w.remove();
                         }
                     }

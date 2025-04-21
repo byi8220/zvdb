@@ -83,6 +83,23 @@ pub fn build(b: *std.Build) void {
     const run_multi_threaded_step = b.step("bench-multi", "Run multi-threaded benchmarks");
     run_multi_threaded_step.dependOn(&run_multi_threaded.step);
 
+    // Recall benchmarks
+    const recall_benchmarks = b.addExecutable(.{
+        .name = "recall_benchmarks",
+        .root_source_file = b.path("benchmarks/recall.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    recall_benchmarks.root_module.addImport("zvdb", lib_module);
+    b.installArtifact(recall_benchmarks);
+
+    const run_recall_benchmarks = b.addRunArtifact(recall_benchmarks);
+    if (b.args) |args| {
+        run_recall_benchmarks.addArgs(args);
+    }
+    const run_recall_benchmarks_step = b.step("bench-recall", "Run recall benchmarks");
+    run_recall_benchmarks_step.dependOn(&run_recall_benchmarks.step);
+
     // Examples
     // const basic_example = b.addExecutable(.{
     //     .name = "basic_usage",

@@ -2,11 +2,11 @@ const std = @import("std");
 const testing = std.testing;
 const HNSW = @import("hnsw.zig").HNSW;
 
-// Helper function to create a random point
+// Helper function to create a normally distrubted random point
 fn randomPoint(allocator: std.mem.Allocator, dim: usize) ![]f32 {
     const point = try allocator.alloc(f32, dim);
     for (point) |*v| {
-        v.* = std.crypto.random.float(f32);
+        v.* = std.crypto.random.floatNorm(f32);
     }
     return point;
 }
@@ -22,8 +22,10 @@ fn euclideanDistance(a: []const f32, b: []const f32) f32 {
 }
 
 test "HNSW - Basic Functionality" {
+    const ef_construction = 200;
+    const ef_search = 50;
     const allocator = testing.allocator;
-    var hnsw = HNSW(f32).init(allocator, 16, 200);
+    var hnsw = HNSW(f32).init(allocator, 16, ef_construction);
     defer hnsw.deinit();
 
     // Insert some points
@@ -33,7 +35,7 @@ test "HNSW - Basic Functionality" {
 
     // Search for nearest neighbors
     const query = &[_]f32{ 3, 4, 5 };
-    const results = try hnsw.search(query, 2);
+    const results = try hnsw.search(query, 2, ef_search);
     defer allocator.free(results);
 
     try testing.expectEqual(@as(usize, 2), results.len);
@@ -41,26 +43,30 @@ test "HNSW - Basic Functionality" {
 }
 
 test "HNSW - Empty Index" {
+    const ef_construction = 200;
+    const ef_search = 50;
     const allocator = testing.allocator;
-    var hnsw = HNSW(f32).init(allocator, 16, 200);
+    var hnsw = HNSW(f32).init(allocator, 16, ef_construction);
     defer hnsw.deinit();
 
     const query = &[_]f32{ 1, 2, 3 };
-    const results = try hnsw.search(query, 5);
+    const results = try hnsw.search(query, 5, ef_search);
     defer allocator.free(results);
 
     try testing.expectEqual(@as(usize, 0), results.len);
 }
 
 test "HNSW - Single Point" {
+    const ef_construction = 200;
+    const ef_search = 50;
     const allocator = testing.allocator;
-    var hnsw = HNSW(f32).init(allocator, 16, 200);
+    var hnsw = HNSW(f32).init(allocator, 16, ef_construction);
     defer hnsw.deinit();
 
     const point = &[_]f32{ 1, 2, 3 };
     try hnsw.insert(point);
 
-    const results = try hnsw.search(point, 1);
+    const results = try hnsw.search(point, 1, ef_search);
     defer allocator.free(results);
 
     try testing.expectEqual(@as(usize, 1), results.len);
@@ -68,8 +74,10 @@ test "HNSW - Single Point" {
 }
 
 test "HNSW - Exact Points" {
+    const ef_construction = 200;
+    const ef_search = 50;
     const allocator = testing.allocator;
-    var hnsw = HNSW(f32).init(allocator, 16, 200);
+    var hnsw = HNSW(f32).init(allocator, 16, ef_construction);
     defer hnsw.deinit();
 
     const point1 = &[_]f32{ 1, 2, 3 };
@@ -79,25 +87,27 @@ test "HNSW - Exact Points" {
     try hnsw.insert(point2);
     try hnsw.insert(point3);
 
-    const results = try hnsw.search(point1, 1);
+    const results = try hnsw.search(point1, 1, ef_search);
     defer allocator.free(results);
     try testing.expectEqual(@as(usize, 1), results.len);
     try testing.expectEqualSlices(f32, point1, results[0].point);
 
-    const results2 = try hnsw.search(point2, 1);
+    const results2 = try hnsw.search(point2, 1, ef_search);
     defer allocator.free(results2);
     try testing.expectEqual(@as(usize, 1), results2.len);
     try testing.expectEqualSlices(f32, point2, results2[0].point);
 
-    const results3 = try hnsw.search(point3, 1);
+    const results3 = try hnsw.search(point3, 1, ef_search);
     defer allocator.free(results3);
     try testing.expectEqual(@as(usize, 1), results3.len);
     try testing.expectEqualSlices(f32, point3, results3[0].point);
 }
 
 test "HNSW - Large Dataset" {
+    const ef_construction = 200;
+    const ef_search = 50;
     const allocator = testing.allocator;
-    var hnsw = HNSW(f32).init(allocator, 16, 200);
+    var hnsw = HNSW(f32).init(allocator, 16, ef_construction);
     defer hnsw.deinit();
 
     const num_points = 10000;
@@ -115,7 +125,7 @@ test "HNSW - Large Dataset" {
     defer allocator.free(query);
 
     const k = 10;
-    const results = try hnsw.search(query, k);
+    const results = try hnsw.search(query, k, ef_search);
     defer allocator.free(results);
 
     try testing.expectEqual(@as(usize, k), results.len);
@@ -130,8 +140,10 @@ test "HNSW - Large Dataset" {
 }
 
 test "HNSW - Edge Cases" {
+    const ef_construction = 200;
+    const ef_search = 100;
     const allocator = testing.allocator;
-    var hnsw = HNSW(f32).init(allocator, 16, 200);
+    var hnsw = HNSW(f32).init(allocator, 16, ef_construction);
     defer hnsw.deinit();
 
     // Insert duplicate points
@@ -139,7 +151,7 @@ test "HNSW - Edge Cases" {
     try hnsw.insert(point);
     try hnsw.insert(point);
 
-    const results = try hnsw.search(point, 2);
+    const results = try hnsw.search(point, 2, ef_search);
     defer allocator.free(results);
 
     try testing.expectEqual(@as(usize, 2), results.len);
@@ -147,20 +159,22 @@ test "HNSW - Edge Cases" {
     try testing.expectEqualSlices(f32, point, results[1].point);
 
     // Search with k larger than number of points
-    const large_k_results = try hnsw.search(point, 100);
+    const large_k_results = try hnsw.search(point, 100, ef_search);
     defer allocator.free(large_k_results);
 
     try testing.expectEqual(@as(usize, 2), large_k_results.len);
 }
 
 test "HNSW - Memory Leaks" {
+    const ef_construction = 200;
+    const ef_search = 100;
     var hnsw: HNSW(f32) = undefined;
     {
         var arena = std.heap.ArenaAllocator.init(testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
 
-        hnsw = HNSW(f32).init(allocator, 16, 200);
+        hnsw = HNSW(f32).init(allocator, 16, ef_construction);
 
         const num_points = 1000;
         const dim = 64;
@@ -172,7 +186,7 @@ test "HNSW - Memory Leaks" {
         }
 
         const query = try randomPoint(allocator, dim);
-        const results = try hnsw.search(query, 10);
+        const results = try hnsw.search(query, 10, ef_search);
         _ = results;
         // Intentionally not freeing 'results' or 'query'
     }
@@ -180,8 +194,10 @@ test "HNSW - Memory Leaks" {
 }
 
 test "HNSW - Concurrent Access" {
+    const ef_construction = 200;
+    const ef_search = 100;
     const allocator = testing.allocator;
-    var hnsw = HNSW(f32).init(allocator, 16, 200);
+    var hnsw = HNSW(f32).init(allocator, 16, ef_construction);
     defer hnsw.deinit();
 
     const num_threads = 8;
@@ -230,15 +246,17 @@ test "HNSW - Concurrent Access" {
     const query = try randomPoint(allocator, dim);
     defer allocator.free(query);
 
-    const results = try hnsw.search(query, 10);
+    const results = try hnsw.search(query, 10, ef_search);
     defer allocator.free(results);
 
     try testing.expectEqual(@as(usize, 10), results.len);
 }
 
 test "HNSW - Stress Test" {
+    const ef_construction = 200;
+    const ef_search = 100;
     const allocator = testing.allocator;
-    var hnsw = HNSW(f32).init(allocator, 16, 200);
+    var hnsw = HNSW(f32).init(allocator, 16, ef_construction);
     defer hnsw.deinit();
 
     const num_points = 100000;
@@ -257,7 +275,7 @@ test "HNSW - Stress Test" {
         const query = try randomPoint(allocator, dim);
         defer allocator.free(query);
 
-        const results = try hnsw.search(query, 10);
+        const results = try hnsw.search(query, 10, ef_search);
         defer allocator.free(results);
 
         try testing.expectEqual(@as(usize, 10), results.len);
@@ -269,7 +287,9 @@ test "HNSW - Different Data Types" {
 
     // Test with integer type
     {
-        var hnsw_int = HNSW(i32).init(allocator, 16, 200);
+        const ef_construction = 200;
+        const ef_search = 50;
+        var hnsw_int = HNSW(i32).init(allocator, 16, ef_construction);
         defer hnsw_int.deinit();
 
         try hnsw_int.insert(&[_]i32{ 1, 2, 3 });
@@ -277,7 +297,7 @@ test "HNSW - Different Data Types" {
         try hnsw_int.insert(&[_]i32{ 7, 8, 9 });
 
         const query_int = &[_]i32{ 3, 4, 5 };
-        const results_int = try hnsw_int.search(query_int, 2);
+        const results_int = try hnsw_int.search(query_int, 2, ef_search);
         defer allocator.free(results_int);
 
         try testing.expectEqual(@as(usize, 2), results_int.len);
@@ -285,7 +305,9 @@ test "HNSW - Different Data Types" {
 
     // Test with float64 type
     {
-        var hnsw_f64 = HNSW(f64).init(allocator, 16, 200);
+        const ef_construction = 200;
+        const ef_search = 50;
+        var hnsw_f64 = HNSW(f64).init(allocator, 16, ef_construction);
         defer hnsw_f64.deinit();
 
         try hnsw_f64.insert(&[_]f64{ 1.1, 2.2, 3.3 });
@@ -293,7 +315,7 @@ test "HNSW - Different Data Types" {
         try hnsw_f64.insert(&[_]f64{ 7.7, 8.8, 9.9 });
 
         const query_f64 = &[_]f64{ 3.3, 4.4, 5.5 };
-        const results_f64 = try hnsw_f64.search(query_f64, 2);
+        const results_f64 = try hnsw_f64.search(query_f64, 2, ef_search);
         defer allocator.free(results_f64);
 
         try testing.expectEqual(@as(usize, 2), results_f64.len);
@@ -301,8 +323,10 @@ test "HNSW - Different Data Types" {
 }
 
 test "HNSW - Consistency" {
+    const ef_construction = 200;
+    const ef_search = 100;
     const allocator = testing.allocator;
-    var hnsw = HNSW(f32).init(allocator, 16, 200);
+    var hnsw = HNSW(f32).init(allocator, 16, ef_construction);
     defer hnsw.deinit();
 
     const num_points = 10000;
@@ -325,7 +349,7 @@ test "HNSW - Consistency" {
     defer allocator.free(first_result);
 
     for (0..num_searches) |i| {
-        const results = try hnsw.search(query, k);
+        const results = try hnsw.search(query, k, ef_search);
         defer allocator.free(results);
 
         if (i == 0) {
