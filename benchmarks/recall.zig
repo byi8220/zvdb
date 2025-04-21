@@ -100,7 +100,7 @@ pub fn runRecall(allocator: Allocator, num_points: usize, num_queries: usize, di
     var points = try std.ArrayList([]f32).initCapacity(allocator, num_points);
     defer points.deinit();
 
-    const ef_search = ef_c / 4;
+    const ef_search = @max(k, ef_c / 4);
     var timer = try std.time.Timer.start();
     const start = timer.lap();
     // Insert points
