@@ -203,14 +203,15 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const num_points = 10000;
-    const num_queries = 1000;
-    const dimensions = &[_]usize{ 32, 64, 128, 512, 768, 1024 };
-    const k_values = &[_]usize{ 10, 25, 50, 100 };
+    // VERY slow test. Making this go faster is the end goal of this project.
+    const num_points = 100000;
+    const num_queries = 100000;
+    const dimensions = &[_]usize{1024};
+    const k_values = &[_]usize{10};
     const m_values = &[_]usize{ 16, 32, 48, 64 };
-    const ef_c_values = &[_]usize{ 64, 128, 200, 400, 800 }; // use ef_search = ef_c / 4
+    const ef_c_values = &[_]usize{ 128, 200, 400, 800 }; // use ef_search = ef_c / 4
 
-    var csv_out_file = try std.fs.cwd().createFile("recall_results.csv", .{});
+    var csv_out_file = try std.fs.cwd().createFile("large_recall_results.csv", .{});
     defer csv_out_file.close();
 
     try csv_out_file.writeAll("operation,num_points,dimensions,num_queries,k,m,ef_c,min_recall,average_recall,max_recall,p90_recall,num_threads,total_time_ns,insertions_per_second,searches_per_second\n");
