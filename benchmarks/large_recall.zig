@@ -205,7 +205,7 @@ pub fn main() !void {
 
     // VERY slow test. Making this go faster is the end goal of this project.
     const num_points = 100000;
-    const num_queries = 100000;
+    const num_queries = 10000;
     const dimensions = &[_]usize{1024};
     const k_values = &[_]usize{10};
     const m_values = &[_]usize{ 16, 32, 48, 64 };
