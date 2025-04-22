@@ -100,6 +100,23 @@ pub fn build(b: *std.Build) void {
     const run_recall_benchmarks_step = b.step("bench-recall", "Run recall benchmarks");
     run_recall_benchmarks_step.dependOn(&run_recall_benchmarks.step);
 
+    // Large recall benchmarks
+    const large_recall_benchmarks = b.addExecutable(.{
+        .name = "large_recall_benchmarks",
+        .root_source_file = b.path("benchmarks/large_recall.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    large_recall_benchmarks.root_module.addImport("zvdb", lib_module);
+    b.installArtifact(large_recall_benchmarks);
+
+    const run_large_recall_benchmarks = b.addRunArtifact(large_recall_benchmarks);
+    if (b.args) |args| {
+        run_large_recall_benchmarks.addArgs(args);
+    }
+    const run_large_recall_benchmarks_step = b.step("bench-large-recall", "Run large recall benchmarks");
+    run_large_recall_benchmarks_step.dependOn(&run_large_recall_benchmarks.step);
+
     // Examples
     // const basic_example = b.addExecutable(.{
     //     .name = "basic_usage",
